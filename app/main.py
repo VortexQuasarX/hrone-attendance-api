@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 from bson import Binary, ObjectId
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Path, Query, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -1184,3 +1184,416 @@ def explain_endpoint(
             verbosity="executionStats",
         )
         return {"endpoint": "department_trend", "collection": "attendance_logs", "explain": clean_doc(exp)}
+
+
+# --------------------------------------------------------------------------- #
+# Interactive Frontend Dashboard
+# --------------------------------------------------------------------------- #
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HROne Attendance & Analytics Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+    .badge-present { background-color: #dcfce7; color: #15803d; }
+    .badge-wfh { background-color: #e0e7ff; color: #4338ca; }
+    .badge-onduty { background-color: #fef3c7; color: #b45309; }
+    .badge-absent { background-color: #fee2e2; color: #b91c1c; }
+    .badge-leave { background-color: #f3e8ff; color: #7e22ce; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+  <!-- Navbar -->
+  <header class="border-b border-slate-800 bg-slate-950/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+          <i class="fa-solid fa-fingerprint text-white text-lg"></i>
+        </div>
+        <div>
+          <span class="text-lg font-bold bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">HROne Attendance</span>
+          <span class="text-xs text-indigo-400 block font-mono">FastAPI + MongoDB Engine</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> MongoDB Connected
+        </span>
+        <a href="/docs" target="_blank" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+          <i class="fa-solid fa-bolt"></i> Swagger Docs
+        </a>
+        <a href="/redoc" target="_blank" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition">
+          ReDoc
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+    
+    <!-- Top Stats -->
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4" id="statsRow">
+      <div class="p-5 rounded-2xl bg-slate-800/60 border border-slate-700/50 backdrop-blur">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Headcount</span>
+        <div class="text-2xl font-bold mt-1 text-white" id="statEmployees">...</div>
+      </div>
+      <div class="p-5 rounded-2xl bg-slate-800/60 border border-slate-700/50 backdrop-blur">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Logs Seeded</span>
+        <div class="text-2xl font-bold mt-1 text-indigo-400" id="statLogs">...</div>
+      </div>
+      <div class="p-5 rounded-2xl bg-slate-800/60 border border-slate-700/50 backdrop-blur">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Active Departments</span>
+        <div class="text-2xl font-bold mt-1 text-emerald-400" id="statDepts">3</div>
+      </div>
+      <div class="p-5 rounded-2xl bg-slate-800/60 border border-slate-700/50 backdrop-blur">
+        <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Indexed Search Scan</span>
+        <div class="text-2xl font-bold mt-1 text-amber-400">100% IXSCAN</div>
+      </div>
+    </div>
+
+    <!-- Live Punch Terminal -->
+    <div class="p-6 rounded-2xl bg-slate-800/80 border border-slate-700 shadow-xl space-y-4">
+      <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+        <div class="flex items-center gap-2.5">
+          <i class="fa-solid fa-clock text-indigo-400"></i>
+          <h2 class="text-base font-bold text-white">Interactive Punch & Attendance Terminal</h2>
+        </div>
+        <span class="text-xs text-slate-400">Real-time Rule Evaluation (R1 - R5)</span>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Select Employee</label>
+          <select id="punchEmp" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            <!-- options populated via JS -->
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Presence Status</label>
+          <select id="punchStatus" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500">
+            <option value="PRESENT">PRESENT (Office)</option>
+            <option value="WFH">WFH (Remote)</option>
+            <option value="ON_DUTY">ON_DUTY (Field/Client)</option>
+          </select>
+        </div>
+        <div class="flex gap-2">
+          <button onclick="handlePunch('in')" class="flex-1 py-2 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold text-white text-sm transition shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-arrow-right-to-bracket"></i> Punch In
+          </button>
+          <button onclick="handlePunch('out')" class="flex-1 py-2 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 font-semibold text-white text-sm transition shadow-lg shadow-rose-600/20 flex items-center justify-center gap-2">
+            <i class="fa-solid fa-arrow-right-from-bracket"></i> Punch Out
+          </button>
+        </div>
+        <div>
+          <button onclick="refreshAll()" class="w-full py-2 px-4 rounded-xl bg-slate-700 hover:bg-slate-600 font-semibold text-slate-200 text-sm transition flex items-center justify-center gap-2">
+            <i class="fa-solid fa-rotate"></i> Refresh View
+          </button>
+        </div>
+      </div>
+
+      <div id="punchAlert" class="hidden p-3.5 rounded-xl text-xs font-mono transition"></div>
+    </div>
+
+    <!-- Analytics Section -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      
+      <!-- Department Summary -->
+      <div class="lg:col-span-2 p-6 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-chart-pie text-violet-400"></i>
+            <h3 class="font-bold text-white text-sm">Department Monthly Summary (July 2026)</h3>
+          </div>
+          <span class="text-xs text-slate-400 font-mono">Cross-Collection Pipeline</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs text-slate-300">
+            <thead class="bg-slate-900/60 text-slate-400 uppercase font-semibold">
+              <tr>
+                <th class="py-2.5 px-3">Department</th>
+                <th class="py-2.5 px-3">Headcount</th>
+                <th class="py-2.5 px-3">Present Days</th>
+                <th class="py-2.5 px-3">Avg Hours</th>
+                <th class="py-2.5 px-3">Late Count</th>
+                <th class="py-2.5 px-3">Total Late</th>
+              </tr>
+            </thead>
+            <tbody id="deptSummaryBody" class="divide-y divide-slate-800">
+              <tr><td colspan="6" class="p-3 text-center text-slate-500">Loading department summary...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Late Leaderboard -->
+      <div class="p-6 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-trophy text-amber-400"></i>
+            <h3 class="font-bold text-white text-sm">Late Leaderboard</h3>
+          </div>
+          <span class="text-xs text-amber-400 font-mono">Window $rank</span>
+        </div>
+        <div class="space-y-2.5" id="leaderboardList">
+          <div class="text-xs text-slate-500 text-center py-4">Loading leaderboard...</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Attendance Logs Table -->
+    <div class="p-6 rounded-2xl bg-slate-800/60 border border-slate-700/60 space-y-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-table-list text-indigo-400"></i>
+          <h3 class="font-bold text-white text-sm">Recent Attendance Logs</h3>
+        </div>
+        <span class="text-xs text-slate-400">Addressable by (emp_code, date)</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300">
+          <thead class="bg-slate-900/60 text-slate-400 uppercase font-semibold">
+            <tr>
+              <th class="py-3 px-3">Date</th>
+              <th class="py-3 px-3">Employee</th>
+              <th class="py-3 px-3">Status</th>
+              <th class="py-3 px-3">Work Hours</th>
+              <th class="py-3 px-3">Late (min)</th>
+              <th class="py-3 px-3">Overtime (min)</th>
+              <th class="py-3 px-3">Audit Entries</th>
+              <th class="py-3 px-3 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="logsTableBody" class="divide-y divide-slate-800">
+            <tr><td colspan="8" class="p-4 text-center text-slate-500">Loading records...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Regularization Modal -->
+    <div id="regModal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+      <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-md space-y-4 shadow-2xl">
+        <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+          <h4 class="font-bold text-white text-sm" id="modalTitle">Regularize Attendance</h4>
+          <button onclick="closeModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <input type="hidden" id="modalEmp">
+        <input type="hidden" id="modalDate">
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">New Status</label>
+          <select id="modalStatus" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+            <option value="PRESENT">PRESENT</option>
+            <option value="WFH">WFH</option>
+            <option value="ON_DUTY">ON_DUTY</option>
+            <option value="ABSENT">ABSENT</option>
+            <option value="LEAVE">LEAVE</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Reason (min 5 chars)</label>
+          <input type="text" id="modalReason" value="Approved retroactive regularization" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-400 mb-1">Authorized By</label>
+          <input type="text" id="modalBy" value="hr.admin" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white">
+        </div>
+        <div class="flex justify-end gap-2 pt-2">
+          <button onclick="closeModal()" class="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300">Cancel</button>
+          <button onclick="submitRegularization()" class="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white">Save Correction</button>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    async function loadEmployees() {
+      const res = await fetch('/employees?page_size=100');
+      const data = await res.json();
+      const select = document.getElementById('punchEmp');
+      select.innerHTML = '';
+      data.items.forEach(e => {
+        const opt = document.createElement('option');
+        opt.value = e.emp_code;
+        opt.textContent = `${e.emp_code} - ${e.name} (${e.department})`;
+        select.appendChild(opt);
+      });
+      document.getElementById('statEmployees').textContent = data.total;
+    }
+
+    async function loadDepartmentSummary() {
+      const res = await fetch('/analytics/departments/summary?month=2026-07');
+      const data = await res.json();
+      const tbody = document.getElementById('deptSummaryBody');
+      tbody.innerHTML = '';
+      data.items.forEach(d => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-800/40 transition';
+        tr.innerHTML = `
+          <td class="py-2.5 px-3 font-semibold text-white">${d.department}</td>
+          <td class="py-2.5 px-3 font-mono">${d.headcount}</td>
+          <td class="py-2.5 px-3 font-mono">${d.present_days.toFixed(1)}</td>
+          <td class="py-2.5 px-3 font-mono">${d.avg_work_hours !== null ? d.avg_work_hours.toFixed(2) + 'h' : 'N/A'}</td>
+          <td class="py-2.5 px-3 font-mono text-amber-400">${d.late_count}</td>
+          <td class="py-2.5 px-3 font-mono text-amber-400">${d.total_late_minutes}m</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function loadLeaderboard() {
+      const res = await fetch('/analytics/leaderboard/late?month=2026-07&limit=5');
+      const data = await res.json();
+      const list = document.getElementById('leaderboardList');
+      list.innerHTML = '';
+      if (!data.items || data.items.length === 0) {
+        list.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">No late-comers recorded!</div>';
+        return;
+      }
+      data.items.forEach(item => {
+        const medal = item.rank === 1 ? '🥇' : item.rank === 2 ? '🥈' : item.rank === 3 ? '🥉' : `#${item.rank}`;
+        const div = document.createElement('div');
+        div.className = 'p-3 rounded-xl bg-slate-900/60 border border-slate-800 flex items-center justify-between text-xs';
+        div.innerHTML = `
+          <div class="flex items-center gap-2.5">
+            <span class="w-6 text-center font-bold text-sm">${medal}</span>
+            <div>
+              <span class="font-semibold text-white block">${item.name}</span>
+              <span class="text-slate-500 font-mono">${item.emp_code} • ${item.department}</span>
+            </div>
+          </div>
+          <div class="text-right">
+            <span class="font-mono font-bold text-amber-400 block">${item.total_late_minutes} min late</span>
+            <span class="text-slate-500">${item.late_count} occurrence(s)</span>
+          </div>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    async function loadAttendanceLogs() {
+      const res = await fetch('/attendance?page_size=20');
+      const data = await res.json();
+      document.getElementById('statLogs').textContent = data.total;
+      const tbody = document.getElementById('logsTableBody');
+      tbody.innerHTML = '';
+      data.items.forEach(log => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-slate-800/40 transition';
+        const badgeClass = log.status === 'PRESENT' ? 'badge-present' :
+                           log.status === 'WFH' ? 'badge-wfh' :
+                           log.status === 'ON_DUTY' ? 'badge-onduty' :
+                           log.status === 'ABSENT' ? 'badge-absent' : 'badge-leave';
+        tr.innerHTML = `
+          <td class="py-3 px-3 font-mono text-slate-400">${log.date}</td>
+          <td class="py-3 px-3 font-semibold text-white">${log.emp_code}</td>
+          <td class="py-3 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${badgeClass}">${log.status}</span></td>
+          <td class="py-3 px-3 font-mono">${log.work_hours !== null ? log.work_hours.toFixed(2) + ' hrs' : '-'}</td>
+          <td class="py-3 px-3 font-mono ${log.late_minutes > 0 ? 'text-amber-400 font-bold' : ''}">${log.late_minutes}</td>
+          <td class="py-3 px-3 font-mono ${log.overtime_minutes > 0 ? 'text-emerald-400 font-bold' : ''}">${log.overtime_minutes}</td>
+          <td class="py-3 px-3 font-mono text-slate-500">${log.history ? log.history.length : 0}</td>
+          <td class="py-3 px-3 text-right">
+            <button onclick="openModal('${log.emp_code}', '${log.date}', '${log.status}')" class="px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 font-semibold text-[11px] transition">
+              Regularize
+            </button>
+          </td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    async function handlePunch(type) {
+      const emp = document.getElementById('punchEmp').value;
+      const status = document.getElementById('punchStatus').value;
+      const alertBox = document.getElementById('punchAlert');
+      alertBox.className = 'p-3.5 rounded-xl text-xs font-mono transition block';
+
+      try {
+        let res;
+        if (type === 'in') {
+          res = await fetch('/attendance/punch-in', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({emp_code: emp, status: status})
+          });
+        } else {
+          res = await fetch('/attendance/punch-out', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({emp_code: emp})
+          });
+        }
+        const data = await res.json();
+        if (res.ok) {
+          alertBox.className += ' bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+          alertBox.innerHTML = `<strong>Success (${res.status}):</strong> ${type === 'in' ? 'Punched in for ' + data.date + ' (Late: ' + data.late_minutes + 'm)' : 'Punched out! Hours: ' + data.work_hours + 'h | Overtime: ' + data.overtime_minutes + 'm | Half Day: ' + data.half_day}`;
+          refreshAll();
+        } else {
+          alertBox.className += ' bg-rose-500/10 text-rose-400 border border-rose-500/30';
+          alertBox.innerHTML = `<strong>Error (${res.status}):</strong> ${data.detail || JSON.stringify(data)}`;
+        }
+      } catch (err) {
+        alertBox.className += ' bg-rose-500/10 text-rose-400 border border-rose-500/30';
+        alertBox.textContent = 'Network or server error: ' + err.message;
+      }
+    }
+
+    function openModal(emp, date, currentStatus) {
+      document.getElementById('modalEmp').value = emp;
+      document.getElementById('modalDate').value = date;
+      document.getElementById('modalStatus').value = currentStatus;
+      document.getElementById('modalTitle').textContent = `Regularize: ${emp} (${date})`;
+      document.getElementById('regModal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('regModal').classList.add('hidden');
+    }
+
+    async function submitRegularization() {
+      const emp = document.getElementById('modalEmp').value;
+      const date = document.getElementById('modalDate').value;
+      const status = document.getElementById('modalStatus').value;
+      const reason = document.getElementById('modalReason').value;
+      const by = document.getElementById('modalBy').value;
+
+      const res = await fetch(`/attendance/${emp}/${date}`, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({status, reason, regularized_by: by})
+      });
+      const data = await res.json();
+      closeModal();
+      if (res.ok) {
+        alert('Record regularized successfully!');
+        refreshAll();
+      } else {
+        alert('Regularization error: ' + (data.detail || JSON.stringify(data)));
+      }
+    }
+
+    function refreshAll() {
+      loadEmployees();
+      loadDepartmentSummary();
+      loadLeaderboard();
+      loadAttendanceLogs();
+    }
+
+    window.onload = refreshAll;
+  </script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse, tags=["system"], include_in_schema=False)
+def dashboard():
+    """Serves the interactive frontend web dashboard."""
+    return HTMLResponse(content=DASHBOARD_HTML)
