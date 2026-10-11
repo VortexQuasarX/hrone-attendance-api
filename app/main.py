@@ -38,19 +38,19 @@ IST = timezone(timedelta(hours=5, minutes=30))
 def init_indexes(database):
     """Create indexes required for performance and integrity idempotently."""
     # employees collection
-    database.employees.create_index([("emp_code", 1)], unique=True, name="idx_emp_code_unique")
-    database.employees.create_index([("department", 1), ("joined_on", 1)], name="idx_emp_dept_joined")
-    database.employees.create_index([("joined_on", 1)], name="idx_emp_joined")
-    database.employees.create_index([("department", 1), ("emp_code", 1)], name="idx_emp_dept_code")
+    database.employees.create_index([("emp_code", 1)], unique=True)
+    database.employees.create_index([("department", 1), ("joined_on", 1)])
+    database.employees.create_index([("joined_on", 1)])
+    database.employees.create_index([("department", 1), ("emp_code", 1)])
 
     # attendance_logs collection
-    database.attendance_logs.create_index([("emp_code", 1), ("date", 1)], unique=True, name="idx_att_emp_date_unique")
-    database.attendance_logs.create_index([("emp_code", 1), ("punch_in", -1)], name="idx_att_emp_punch_in_desc")
-    database.attendance_logs.create_index([("date", -1), ("emp_code", 1)], name="idx_att_date_desc_emp_asc")
-    database.attendance_logs.create_index([("emp_code", 1), ("date", -1)], name="idx_att_emp_date_desc")
-    database.attendance_logs.create_index([("status", 1), ("date", -1), ("emp_code", 1)], name="idx_att_status_date_emp")
-    database.attendance_logs.create_index([("date", 1), ("late_minutes", 1), ("emp_code", 1)], name="idx_att_date_late_emp")
-    database.attendance_logs.create_index([("date", 1)], name="idx_att_date")
+    database.attendance_logs.create_index([("emp_code", 1), ("date", 1)], unique=True)
+    database.attendance_logs.create_index([("emp_code", 1), ("punch_in", -1)])
+    database.attendance_logs.create_index([("date", -1), ("emp_code", 1)])
+    database.attendance_logs.create_index([("emp_code", 1), ("date", -1)])
+    database.attendance_logs.create_index([("status", 1), ("date", -1), ("emp_code", 1)])
+    database.attendance_logs.create_index([("date", 1), ("late_minutes", 1), ("emp_code", 1)])
+    database.attendance_logs.create_index([("date", 1)])
 
 
 @asynccontextmanager
